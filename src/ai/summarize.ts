@@ -1,4 +1,5 @@
-const SUMMARIZE_ENDPOINT = '/api/summarize'
+import { getSummarizeUrl } from './config'
+
 const GENERIC_FAILURE = 'The summary service could not be reached. Please try again.'
 const THROTTLE_RETRIES = 1
 const DEFAULT_RETRY_DELAY_MS = 5_000
@@ -30,7 +31,7 @@ function retryDelay(response: Response): number {
  */
 export async function summarize(text: string, onChunk: (chunk: string) => void, signal?: AbortSignal): Promise<void> {
   for (let attempt = 0; ; attempt++) {
-    const response = await fetch(SUMMARIZE_ENDPOINT, {
+    const response = await fetch(getSummarizeUrl(), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text }),

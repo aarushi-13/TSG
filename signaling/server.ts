@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { WebSocket, WebSocketServer } from 'ws'
@@ -23,31 +23,6 @@ type SignalingService = {
   getMetrics: () => { connections: number; rooms: number; forwarded: number }
 }
 
-type SummarizeHandler = (request: IncomingMessage, response: ServerResponse) => Promise<void>
-
-let summarizeHandler: SummarizeHandler | null | undefined
-
-/**
- * Loads the AI summary route lazily. The handler lives in plain JavaScript under `server/`, which sits
- * one level above the TypeScript source and two levels above the compiled `dist/signaling` output, so
- * both layouts are tried. A handler that cannot be loaded leaves the route unavailable rather than
- * failing service startup.
- */
-async function loadSummarizeHandler(): Promise<SummarizeHandler | null> {
-  if (summarizeHandler !== undefined) return summarizeHandler
-  for (const candidate of ['../server/summarize.js', '../../server/summarize.js']) {
-    try {
-      const loaded = await import(new URL(candidate, import.meta.url).href)
-      summarizeHandler = loaded.handleSummarize as SummarizeHandler
-      return summarizeHandler
-    } catch {
-      // Try the next layout.
-    }
-  }
-  summarizeHandler = null
-  return null
-}
-
 /** y-webrtc-compatible rendezvous only. This service has no Y.Doc or document-content store. */
 export function createSignalingService(allowedOrigins = parseAllowedOrigins(process.env.WS_ALLOWED_ORIGINS)): SignalingService {
   const rooms = new Map<string, Set<WebSocket>>()
@@ -65,19 +40,6 @@ export function createSignalingService(allowedOrigins = parseAllowedOrigins(proc
     if (request.method === 'GET' && path === '/') {
       response.writeHead(200, { 'content-type': 'text/plain' })
       response.end('TSG signaling only. Document contents are not stored here.\n')
-      return
-    }
-    if (path === '/api/summarize') {
-      void loadSummarizeHandler().then(handler => {
-        if (handler) return handler(request, response)
-        response.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' })
-        response.end('AI summaries are not configured on this server.')
-      }).catch(() => {
-        if (!response.writableEnded) {
-          response.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
-          response.end('Summary failed. Please try again.')
-        }
-      })
       return
     }
     response.writeHead(404)

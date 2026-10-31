@@ -4,9 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k -n web,signal -c cyan,magenta \"npm:dev:web\" \"npm:signaling\"",
-    "dev:web": "vite --host 0.0.0.0",
+    "dev": "vite --host 0.0.0.0",
+    "dev:all": "concurrently -k -n web,signal,llm -c cyan,magenta,yellow \"npm:dev\" \"npm:signaling\" \"npm:llm\"",
     "start": "npm run signaling:build && node --env-file-if-exists=.env dist/signaling/server.js",
+    "llm": "node --env-file-if-exists=.env server/index.js",
+    "llm:start": "node --env-file-if-exists=.env server/index.js",
     "signaling": "tsx watch signaling/server.ts",
     "signaling:build": "tsc -p signaling/tsconfig.json",
     "signaling:start": "node --env-file-if-exists=.env dist/signaling/server.js",

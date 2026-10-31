@@ -3,6 +3,7 @@
 interface ImportMetaEnv {
   readonly VITE_SIGNALING_URL?: string
   readonly VITE_STUN_URLS?: string
+  readonly VITE_SUMMARY_URL?: string
 }
 
 interface ImportMeta {

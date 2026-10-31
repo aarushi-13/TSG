@@ -118,6 +118,83 @@ Deletion removes the snapshot from the active shared version map and persists th
 
 The browser tests simulate short offline intervals (seconds), not weeks or months. The process-restart scenario restores with the browser online; service-worker/app-shell caching is Phase 7, so reopening the application itself while offline is not guaranteed. Abrupt browser crashes and long-duration storage eviction/quota tests were not run in Phase 6. Existing persistence unit tests cover transaction failures and recovery using fake IndexedDB, not physical storage pressure. Conflict grouping is per stable text block and causal episode, while classification remains based on text-block snapshots rather than general semantic interpretation of every rich-text operation. Actual LAN, restrictive NAT, TURN and multi-device long-duration scenarios remain untested. The suite asserts convergence and successful recovery but does not yet collect latency, synchronized-update, or long-run recovery-rate metrics.
 
+## AI document summarization (integrated from the TSG v1.2 line)
+
+The LLM summarization feature from the earlier TSG v1.2 project was integrated into this version.
+Only the summarization feature was brought across; this version's conflict resolution and version
+history remain the base implementation and were not modified to accommodate it.
+
+- [x] Reused the existing v1.2 implementation rather than rebuilding it: the streaming client
+      (`src/ai/summarize.ts`), the panel (`src/ai/SummaryPanel.tsx`) and the provider handler
+      (`server/summarize.js`) were carried over, keeping the Groq provider and `openai/gpt-oss-20b`
+      model, the system prompt, the request bounds, the per-IP throttle and the 429 retry behaviour.
+- [x] The summary route runs as its own service (`server/index.js`, `npm run llm`, port 4455), not on
+      the WebRTC signaling service. v1.2 mounted it on signaling; that was deliberately not carried
+      over. `signaling/server.ts` is byte-identical to its pre-integration state, so a provider
+      outage, a missing key or a rate limit cannot affect rendezvous or document sync, and signaling
+      never needs the API key in its environment.
+- [x] `GROQ_API_KEY` is read only by the summary service. It is not bundled, never reaches the
+      browser and is never written to a response; provider error text is logged and replaced with a
+      generic message. `.env` stays gitignored and `.env.example` documents every variable.
+- [x] Summarization reads the live editor, not the IndexedDB projection, which is debounced and can
+      lag. `src/ai/documentText.ts` walks the ProseMirror JSON and preserves headings, bullet and
+      ordered lists with nesting, task-item state, blockquotes, fenced code, tables, hard breaks and
+      horizontal rules as light markdown, so the model keeps the document's outline instead of the
+      single flattened run `editor.getText()` produces.
+- [x] Generating a summary is read-only with respect to document state. It writes no Yjs update, so
+      it creates no version checkpoint, no conflict intent and nothing for peers to receive. A
+      summary lives in the requesting browser's React state and is visible only to that user.
+- [x] Inserting a summary is a separate explicit action. Nothing is inserted automatically; on click
+      the summary is appended as a heading and list through the normal TipTap transaction path, so it
+      syncs, autosaves and becomes versionable exactly like typed text.
+- [x] A finished summary states the character count and time of the revision it was generated from,
+      and says the document has changed and to regenerate once the live text no longer matches.
+- [x] Loading, error, timeout, throttle, oversized and empty-document states are handled, with copy,
+      regenerate and retry actions. The Summarize button is disabled below 20 characters and while
+      the browser is offline, each with an explanatory tooltip.
+- [x] Editing, IndexedDB persistence, y-indexeddb, y-webrtc sync and conflict/version features have
+      no dependency on the summary service and were verified to work with it returning 503.
+
+### Verification and boundaries
+
+`npm test` passes 113 tests across twelve files, up from the 46 across eight files that this version
+carried before the integration; all 46 pre-existing tests still pass unchanged as regression cover.
+The 67 added tests are 13 for structured text extraction, 17 for the feature against a live mounted
+editor, 16 for the streaming client and panel lifecycle, 21 for the service and provider handler
+over real HTTP with the provider mocked. `npm run build`, `npm run signaling:build` and
+`npm run typecheck:integration` pass. The editor chunk is 537.92 kB minified, still above Vite's
+500 kB advisory as it was before this work.
+
+The editor-level tests assert the properties this integration had to preserve rather than only that
+the feature works: that generating a summary emits no Y.Doc update at all, adds no entry to the
+version map, records no conflict, relays nothing to a second Y.Doc standing in for a peer, and
+leaves the summary text out of the document until Insert is clicked, and that a second Y.Doc acting
+as a peer can edit mid-request with the edit arriving in the open editor. A control test in the same file
+types into the editor with the same observer attached and asserts updates do arrive, so those
+negative assertions cannot pass merely because nothing was being observed.
+
+Live summarization was verified end to end against the real Groq API through both the standalone
+service on port 4455 and the Vite dev middleware, returning a correct streamed summary of a
+structured test document. An earlier attempt the same day failed with Groq `403 Access denied.
+Please check your network settings.`; plain `curl` to the provider with no application involved
+returned the identical 403, confirming a network-level block rather than a defect, and the call
+succeeded once that network condition cleared. The provider hop therefore depends on an egress path
+Groq accepts, which VPN or proxy egress may block.
+
+Boundaries: summarization is cloud-based and needs internet access, so it is outside the
+offline-first guarantee; there is no local-inference path and none was available to reuse from v1.2.
+Document text is sent to Groq, a third party, on each explicit request. The service persists nothing
+and logs only a character count, but it is a plain HTTP service with no authentication of its own,
+so deployment must put it behind the same trust boundary as the rest of the application. The
+per-IP throttle and the summary cache are in-process, so they do not hold across a restart or
+several instances. Summary quality itself is not asserted; tests fix the transport, the extraction
+and the document-safety properties, not the model's wording. Prompt injection from document content
+is limited by `<document>` tags and a system instruction to treat the content as data, which reduces
+but does not eliminate the risk. No Playwright scenario drives the summary panel in a real browser;
+the existing browser suite is used only as regression cover for collaboration, offline, conflict and
+version-history behaviour, where all seven scenarios pass in real Chromium contexts over real
+WebRTC after the integration.
+
 ## Next milestone — Phase 7: PWA
 
 Add the manifest, versioned service worker and application-shell/static-asset caching, then verify offline reopening after an initial online visit in real browser contexts. Keep this separate from document synchronization: peers remain the only document sync path, and the PWA cache must not be described as offline document backup.

@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { Check, Copy, LoaderCircle, RefreshCw, Sparkles, X } from 'lucide-react'
+import { Check, Copy, FilePlus, LoaderCircle, RefreshCw, Sparkles, X } from 'lucide-react'
 import { summarize } from './summarize'
 
-type Props = { getText: () => string; onClose: () => void }
+type Props = {
+  getText: () => string
+  onClose: () => void
+  /** Live document text. Supplied, the panel can flag a summary the document has since moved past. */
+  currentText?: string
+  /** Supplied only when the host can accept the summary back; omitted, no insert action is offered. */
+  onInsert?: (summary: string) => void
+}
+
+/** The exact text a summary was generated from, so the panel can say what it describes. */
+type SummarySnapshot = { text: string; capturedAt: number; characters: number }
 type Status = 'loading' | 'streaming' | 'done' | 'error'
 
 export const AI_DISCLAIMER = 'AI-generated, may contain mistakes.'
@@ -11,11 +21,13 @@ export const AI_DISCLAIMER = 'AI-generated, may contain mistakes.'
  * Overlay panel that streams an AI summary of the current document. It is positioned over the page
  * rather than inside the editor column, so opening it never reflows the paper or interrupts typing.
  */
-export default function SummaryPanel({ getText, onClose }: Props) {
+export default function SummaryPanel({ getText, onClose, currentText, onInsert }: Props) {
   const [status, setStatus] = useState<Status>('loading')
   const [summary, setSummary] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
   const [copied, setCopied] = useState(false)
+  const [inserted, setInserted] = useState(false)
+  const [snapshot, setSnapshot] = useState<SummarySnapshot | null>(null)
   const controller = useRef<AbortController | null>(null)
   const copyTimer = useRef<number | undefined>(undefined)
   const abortTimer = useRef<number | undefined>(undefined)
@@ -29,7 +41,10 @@ export default function SummaryPanel({ getText, onClose }: Props) {
     setStatus('loading')
     setSummary('')
     setErrorMessage('')
-    void summarize(latestText.current(), chunk => {
+    const captured = latestText.current()
+    setSnapshot({ text: captured, capturedAt: Date.now(), characters: captured.length })
+    setInserted(false)
+    void summarize(captured, chunk => {
       if (active.signal.aborted) return
       setStatus('streaming')
       setSummary(previous => previous + chunk)
@@ -75,6 +90,13 @@ export default function SummaryPanel({ getText, onClose }: Props) {
     }
   }
 
+  const stale = Boolean(snapshot && currentText !== undefined && currentText.trim() !== snapshot.text.trim())
+  const insert = () => {
+    if (!onInsert || !summary.trim()) return
+    onInsert(summary.trim())
+    setInserted(true)
+  }
+
   const streaming = status === 'loading' || status === 'streaming'
   return <aside className="summary-panel" role="dialog" aria-label="AI summary">
     <header className="summary-panel-top">
@@ -92,8 +114,12 @@ export default function SummaryPanel({ getText, onClose }: Props) {
       {status !== 'error' && <div className="summary-actions">
         <button className="summary-action" type="button" onClick={() => void copy()} disabled={streaming || !summary.trim()}>{copied ? <><Check size={13}/> Copied</> : <><Copy size={13}/> Copy</>}</button>
         <button className="summary-action" type="button" onClick={run} disabled={streaming}><RefreshCw size={13}/> Regenerate</button>
+        {onInsert && <button className="summary-action" type="button" onClick={insert} disabled={streaming || !summary.trim()}>{inserted ? <><Check size={13}/> Inserted</> : <><FilePlus size={13}/> Insert into document</>}</button>}
         <button className="summary-action" type="button" onClick={onClose}>Close</button>
       </div>}
+      {snapshot && !streaming && <p className={`summary-snapshot ${stale ? 'is-stale' : ''}`}>{stale
+        ? `The document has changed since this summary of ${snapshot.characters.toLocaleString()} characters at ${new Date(snapshot.capturedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}. Regenerate for the current text.`
+        : `Summary of ${snapshot.characters.toLocaleString()} characters as of ${new Date(snapshot.capturedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}.`}</p>}
       <p className="summary-note">{AI_DISCLAIMER}</p>
     </footer>
   </aside>

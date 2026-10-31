@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
+import type { JSONContent } from '@tiptap/core'
 import { EditorContent, useEditor, useEditorState, type Editor } from '@tiptap/react'
 import { AlignCenter, AlignLeft, AlignRight, ArrowLeft, Bold, Check, Code2, Heading1, Heading2, Italic, Link2, List as ListIcon, ListChecks, ListOrdered, LoaderCircle, Minus, Quote, Redo2, Share2, Sparkles, Strikethrough, Table2, Underline, Undo2, WifiOff } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -15,6 +16,7 @@ import { adoptBlockIdentity, getRichTextBlocks } from '../conflicts/blockIdentit
 import { DocumentVersionHistory } from '../versions/documentVersionHistory'
 import { VersionHistoryPanel } from '../versions/VersionHistoryPanel'
 import SummaryPanel from '../ai/SummaryPanel'
+import { extractDocumentText } from '../ai/documentText'
 
 type Props = { document: DocumentRecord; onSave: (patch: Pick<Partial<DocumentRecord>, 'title' | 'content'>) => Promise<boolean> }
 
@@ -359,13 +361,38 @@ function CollaborativeEditor({ document, onSave, session, network }: Props & { s
     setContentStats({ words: text.trim() ? text.trim().split(/\s+/u).length : 0, characters: text.length })
   }, [editorTextState])
 
-  const summaryTooShort = (editorTextState ?? '').trim().length < MIN_SUMMARY_CHARACTERS
+  // Structured plain text of the live document, recomputed per editor transaction so the panel can
+  // send the current revision and notice when the document has moved past a finished summary.
+  // Read-only: it serializes editor state and never writes to the editor or the Y.Doc behind it.
+  const summaryText = useEditorState({ editor, selector: ({ editor: current }) => extractDocumentText(current?.getJSON()) }) ?? ''
+  const summaryTooShort = summaryText.trim().length < MIN_SUMMARY_CHARACTERS
   const summaryDisabled = !online || summaryTooShort
   const summaryHint = !online
     ? OFFLINE_SUMMARY_HINT
     : summaryTooShort ? `Write at least ${MIN_SUMMARY_CHARACTERS} characters to summarize` : 'Summarize this document'
-  const readDocumentText = useCallback(() => editor?.getText() ?? '', [editor])
+  const readDocumentText = useCallback(() => extractDocumentText(editor?.getJSON()), [editor])
   const closeSummary = useCallback(() => setSummaryOpen(false), [])
+
+  /**
+   * Appends a finished summary as its own section, only ever from an explicit click. Being a real
+   * local edit it syncs to peers, autosaves and becomes versionable exactly like typed text; nothing
+   * is inserted while a summary is merely generated.
+   */
+  const insertSummary = useCallback((text: string) => {
+    if (!editor) return
+    const lines = text.split('\n').map(line => line.trim()).filter(Boolean)
+    if (!lines.length) return
+    const content: JSONContent[] = [{ type: 'heading', attrs: { level: 3 }, content: [{ type: 'text', text: 'AI summary' }] }]
+    for (const line of lines) {
+      const bullet = /^[-*\u2022]\s+(.*)$/u.exec(line)
+      if (!bullet) { content.push({ type: 'paragraph', content: [{ type: 'text', text: line }] }); continue }
+      const item: JSONContent = { type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: bullet[1] }] }] }
+      const previous = content[content.length - 1]
+      if (previous?.type === 'bulletList' && previous.content) previous.content.push(item)
+      else content.push({ type: 'bulletList', content: [item] })
+    }
+    editor.chain().focus('end').insertContentAt(editor.state.doc.content.size, content).run()
+  }, [editor])
 
   useEffect(() => {
     let disposed = false
@@ -420,7 +447,7 @@ function CollaborativeEditor({ document, onSave, session, network }: Props & { s
     <div className="toolbar-wrap"><Toolbar editor={editor}/></div>
     <main className="editor-scroll"><article className="editor-paper"><div className="paper-eyebrow">DOCUMENT · LOCAL-FIRST PEER ROOM</div><EditorContent editor={editor} className="tiptap-content"/><div className="paper-footer">Made for your thoughts, wherever they find you.</div></article></main>
     <footer className="editor-statusbar"><span>{contentStats.words} words <i/> {contentStats.characters} characters</span><span>Saved {new Date(savedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span></footer>
-    {summaryOpen && <SummaryPanel getText={readDocumentText} onClose={closeSummary}/>}
+    {summaryOpen && <SummaryPanel getText={readDocumentText} currentText={summaryText} onInsert={insertSummary} onClose={closeSummary}/>}
   </div>
 }
 

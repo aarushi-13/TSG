@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
-    include: ['src/**/*.test.{ts,tsx}', 'signaling/**/*.test.ts'],
+    include: ['src/**/*.test.{ts,tsx}', 'signaling/**/*.test.ts', 'server/**/*.test.js'],
     environment: 'jsdom',
     setupFiles: ['./src/testSetup.ts'],
     fileParallelism: false,

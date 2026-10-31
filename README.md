@@ -23,7 +23,9 @@ Milestone-by-milestone notes are in [PROGRESS.md](./PROGRESS.md).
 ```sh
 npm install
 npm run dev
+npm run dev:all
 npm run signaling
+npm run llm
 npm test
 npm run test:e2e
 npm run typecheck:integration
@@ -31,6 +33,30 @@ npm run build
 npm run signaling:build
 npm run preview
 ```
+
+## AI summarization
+
+An optional **AI Summary** panel in the editor summarizes the open document on request. It is
+additive: the editor, CRDT, persistence, peer sync, conflict review and version history all work
+exactly as before with the feature unused or unconfigured.
+
+- **Provider and model:** Groq, `openai/gpt-oss-20b` by default, overridable with `GROQ_MODEL`.
+- **Service:** `server/index.js`, started with `npm run llm`, listening on port 4455 by default.
+  It is a separate process from the WebRTC signaling service, so an LLM outage, a missing key or a
+  provider rate limit cannot affect document synchronization. Signaling never needs the API key.
+- **Key handling:** `GROQ_API_KEY` is read only by that service. It is never bundled, never sent to
+  the browser and never written to a response. `.env` is gitignored; `.env.example` is the template.
+- **What is sent:** only when the user clicks AI Summary, and only the text of the document they
+  have open, extracted from the live editor. No document content is stored by the service, and only
+  a character count is logged. Groq processes the text as a third party.
+- **Summaries are private to the requester.** The result lives in local React state, never in the
+  Y.Doc, so collaborators neither see it nor receive any update while it is generated. Inserting a
+  summary into the document is an explicit, separate click; only then does it sync like typed text.
+- **Offline:** the Summarize button is disabled with an explanatory tooltip when the browser is
+  offline. Editing, local persistence and peer sync are unaffected.
+
+Set `VITE_SUMMARY_URL` if the browser should reach the service at some address other than the
+same-origin `/api/summarize` path that `npm run dev` and a production reverse proxy provide.
 
 ## Roadmap
 
@@ -42,6 +68,7 @@ npm run preview
 6. Offline sync: local recovery, ordered reconnect tests, state-vector convergence status, and overlapping-edit review (implemented; test-duration limits are documented).
 7. PWA: application shell caching and offline reopen.
 8. Advanced features: comments, activity, settings, export, and stronger conflict classification.
+   AI document summarization is implemented as an optional, separately deployed service.
 9. Broader fault-injection, performance and cross-network TURN tests.
 10. Deployment and operational hardening.
 
