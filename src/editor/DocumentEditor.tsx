@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { EditorContent, useEditor, useEditorState, type Editor } from '@tiptap/react'
-import { AlignCenter, AlignLeft, AlignRight, ArrowLeft, Bold, Check, Code2, Heading1, Heading2, Italic, Link2, List as ListIcon, ListChecks, ListOrdered, LoaderCircle, Minus, Quote, Redo2, Share2, Strikethrough, Table2, Underline, Undo2, WifiOff } from 'lucide-react'
+import { AlignCenter, AlignLeft, AlignRight, ArrowLeft, Bold, Check, Code2, Heading1, Heading2, Italic, Link2, List as ListIcon, ListChecks, ListOrdered, LoaderCircle, Minus, Quote, Redo2, Share2, Sparkles, Strikethrough, Table2, Underline, Undo2, WifiOff } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import type { DocumentRecord } from '../documents/types'
 import { createEditorExtensions } from './extensions'
@@ -14,8 +14,30 @@ import { consumeLocalEditContext } from './extensions'
 import { adoptBlockIdentity, getRichTextBlocks } from '../conflicts/blockIdentity'
 import { DocumentVersionHistory } from '../versions/documentVersionHistory'
 import { VersionHistoryPanel } from '../versions/VersionHistoryPanel'
+import SummaryPanel from '../ai/SummaryPanel'
 
 type Props = { document: DocumentRecord; onSave: (patch: Pick<Partial<DocumentRecord>, 'title' | 'content'>) => Promise<boolean> }
+
+/** Shortest document the summarizer accepts, matching the server-side floor. */
+const MIN_SUMMARY_CHARACTERS = 20
+
+const OFFLINE_SUMMARY_HINT = 'Summaries need an internet connection'
+
+/** Tracks browser connectivity for the summarizer only; peer sync has its own offline handling. */
+function useOnlineStatus(): boolean {
+  const [online, setOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine)
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine)
+    window.addEventListener('online', update)
+    window.addEventListener('offline', update)
+    update()
+    return () => {
+      window.removeEventListener('online', update)
+      window.removeEventListener('offline', update)
+    }
+  }, [])
+  return online
+}
 
 function safeHref(input: string): string | null {
   try {
@@ -250,6 +272,8 @@ function CollaborativeEditor({ document, onSave, session, network }: Props & { s
   const [savedAt, setSavedAt] = useState(document.updatedAt)
   const [contentStats, setContentStats] = useState({ words: 0, characters: 0 })
   const [inviteCopied, setInviteCopied] = useState(false)
+  const [summaryOpen, setSummaryOpen] = useState(false)
+  const online = useOnlineStatus()
   const collaborator = useMemo(() => getLocalCollaborator(), [])
   const conflictManager = useMemo(() => new ConflictManager(session.doc, { id: collaborator.id, name: collaborator.name }, document.id), [session.doc, collaborator, document.id])
   const versionHistory = useMemo(() => new DocumentVersionHistory(session.doc, collaborator), [session.doc, collaborator])
@@ -335,6 +359,14 @@ function CollaborativeEditor({ document, onSave, session, network }: Props & { s
     setContentStats({ words: text.trim() ? text.trim().split(/\s+/u).length : 0, characters: text.length })
   }, [editorTextState])
 
+  const summaryTooShort = (editorTextState ?? '').trim().length < MIN_SUMMARY_CHARACTERS
+  const summaryDisabled = !online || summaryTooShort
+  const summaryHint = !online
+    ? OFFLINE_SUMMARY_HINT
+    : summaryTooShort ? `Write at least ${MIN_SUMMARY_CHARACTERS} characters to summarize` : 'Summarize this document'
+  const readDocumentText = useCallback(() => editor?.getText() ?? '', [editor])
+  const closeSummary = useCallback(() => setSummaryOpen(false), [])
+
   useEffect(() => {
     let disposed = false
     const persistProjection = () => {
@@ -384,10 +416,11 @@ function CollaborativeEditor({ document, onSave, session, network }: Props & { s
     <header className="editor-topbar"><Link to="/app" className="editor-back" aria-label="Back to documents"><ArrowLeft size={17}/></Link><Link to="/app" className="editor-brand"><span className="brand-mark"><span/></span><span>TSG</span></Link><span className="editor-top-divider"/><input aria-label="Document title" className="document-title-input" value={title} maxLength={120} onChange={event => {
       const next = event.target.value; setTitle(next); setSaveState('saving'); window.clearTimeout(titleTimer.current)
       titleTimer.current = window.setTimeout(() => savePatch({ title: next }), 300)
-      }} onBlur={() => { window.clearTimeout(titleTimer.current); const normalized = title.trim().slice(0, 120) || 'Untitled document'; setTitle(normalized); savePatch({ title: normalized }) }} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }}/><span className={`editor-save-state ${saveState}`}>{saveState === 'saving' ? <><LoaderCircle size={13}/> Saving…</> : saveState === 'error' ? <><WifiOff size={13}/> Save failed</> : <><Check size={13}/> Saved on this device</>}</span><span className="peer-status" role="status" aria-label="Peer connection status" data-network-status={networkState.status} data-signaling-connected={networkState.signalingConnected}><i className={networkState.status}/>{networkStatusLabel(networkState)}</span><span className={`sync-indicator ${syncKind}`} role="status" aria-label="Document synchronization status" data-sync-status={syncKind}>{syncLabel}</span><ConflictReview manager={conflictManager} conflicts={conflictState.conflicts} editor={editor}/><VersionHistoryPanel editor={editor} history={versionHistory} versions={versionState} network={networkState} getCurrentContent={() => editor.getJSON()} flushPersistence={session.flush} suppressConflictRecording={operation => conflictManager.runWithoutRecording(operation)}/><div className="peer-avatars" aria-label="Connected collaborators">{networkState.collaborators.slice(0, 5).map(user => <span className="peer-avatar" key={user.clientId} title={user.name} aria-label={user.name} style={{ backgroundColor: user.color }}>{user.name.slice(0, 1).toUpperCase()}</span>)}</div><button className="peer-share" type="button" onClick={() => void copyInviteLink()} aria-label="Copy invite link" title="Copy invite link"><Share2 size={14}/><span>{inviteCopied ? 'Copied' : 'Share'}</span></button></header>
+      }} onBlur={() => { window.clearTimeout(titleTimer.current); const normalized = title.trim().slice(0, 120) || 'Untitled document'; setTitle(normalized); savePatch({ title: normalized }) }} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }}/><span className={`editor-save-state ${saveState}`}>{saveState === 'saving' ? <><LoaderCircle size={13}/> Saving…</> : saveState === 'error' ? <><WifiOff size={13}/> Save failed</> : <><Check size={13}/> Saved on this device</>}</span><span className="peer-status" role="status" aria-label="Peer connection status" data-network-status={networkState.status} data-signaling-connected={networkState.signalingConnected}><i className={networkState.status}/>{networkStatusLabel(networkState)}</span><span className={`sync-indicator ${syncKind}`} role="status" aria-label="Document synchronization status" data-sync-status={syncKind}>{syncLabel}</span><ConflictReview manager={conflictManager} conflicts={conflictState.conflicts} editor={editor}/><VersionHistoryPanel editor={editor} history={versionHistory} versions={versionState} network={networkState} getCurrentContent={() => editor.getJSON()} flushPersistence={session.flush} suppressConflictRecording={operation => conflictManager.runWithoutRecording(operation)}/><div className="peer-avatars" aria-label="Connected collaborators">{networkState.collaborators.slice(0, 5).map(user => <span className="peer-avatar" key={user.clientId} title={user.name} aria-label={user.name} style={{ backgroundColor: user.color }}>{user.name.slice(0, 1).toUpperCase()}</span>)}</div><button className={`summary-button ${summaryOpen ? 'is-active' : ''}`} type="button" onClick={() => setSummaryOpen(open => !open)} disabled={summaryDisabled} aria-label="Summarize" title={summaryHint} aria-pressed={summaryOpen}><Sparkles size={14}/><span>Summarize</span></button><button className="peer-share" type="button" onClick={() => void copyInviteLink()} aria-label="Copy invite link" title="Copy invite link"><Share2 size={14}/><span>{inviteCopied ? 'Copied' : 'Share'}</span></button></header>
     <div className="toolbar-wrap"><Toolbar editor={editor}/></div>
     <main className="editor-scroll"><article className="editor-paper"><div className="paper-eyebrow">DOCUMENT · LOCAL-FIRST PEER ROOM</div><EditorContent editor={editor} className="tiptap-content"/><div className="paper-footer">Made for your thoughts, wherever they find you.</div></article></main>
     <footer className="editor-statusbar"><span>{contentStats.words} words <i/> {contentStats.characters} characters</span><span>Saved {new Date(savedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span></footer>
+    {summaryOpen && <SummaryPanel getText={readDocumentText} onClose={closeSummary}/>}
   </div>
 }
 

@@ -77,4 +77,78 @@ describe('DocumentEditor', () => {
     fireEvent.blur(title)
     expect(await screen.findByText('Save failed')).toBeInTheDocument()
   })
+
+
+  it('keeps Summarize disabled until the document has enough text', async () => {
+    const user = userEvent.setup()
+    renderEditor()
+
+    const summarize = await screen.findByRole('button', { name: 'Summarize' })
+    expect(summarize).toBeDisabled()
+    expect(summarize).toHaveAttribute('title', 'Write at least 20 characters to summarize')
+
+    await waitFor(() => expect(document.querySelector('.ProseMirror')).toBeTruthy())
+    const editable = document.querySelector<HTMLElement>('.ProseMirror')!
+    await user.click(editable)
+    await user.type(editable, 'A draft with plenty of words in it now.')
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Summarize' })).toBeEnabled())
+  })
+
+  it('disables Summarize while the browser is offline', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+    renderEditor()
+
+    await waitFor(() => expect(document.querySelector('.ProseMirror')).toBeTruthy())
+    const editable = document.querySelector<HTMLElement>('.ProseMirror')!
+    await user.click(editable)
+    await user.type(editable, 'A draft with plenty of words in it now.')
+
+    const summarize = screen.getByRole('button', { name: 'Summarize' })
+    expect(summarize).toBeDisabled()
+    expect(summarize).toHaveAttribute('title', 'Summaries need an internet connection')
+  })
+
+  it('opens the summary panel and streams the result in', async () => {
+    const user = userEvent.setup()
+    const encoder = new TextEncoder()
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('- The draft is about a walk outside.\n'))
+        controller.close()
+      },
+    }), { status: 200 })))
+    renderEditor()
+
+    await waitFor(() => expect(document.querySelector('.ProseMirror')).toBeTruthy())
+    const editable = document.querySelector<HTMLElement>('.ProseMirror')!
+    await user.click(editable)
+    await user.type(editable, 'A draft with plenty of words in it now.')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Summarize' })).toBeEnabled())
+    await user.click(screen.getByRole('button', { name: 'Summarize' }))
+
+    expect(await screen.findByRole('dialog', { name: 'AI summary' })).toBeInTheDocument()
+    expect(await screen.findByText('The draft is about a walk outside.')).toBeInTheDocument()
+    expect(screen.getByText('AI-generated, may contain mistakes.')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Close summary' }))
+    expect(screen.queryByRole('dialog', { name: 'AI summary' })).not.toBeInTheDocument()
+  })
+
+  it('shows the server message and a retry button when summarizing fails', async () => {
+    const user = userEvent.setup()
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('AI summaries are not configured on this server.', { status: 503 })))
+    renderEditor()
+
+    await waitFor(() => expect(document.querySelector('.ProseMirror')).toBeTruthy())
+    const editable = document.querySelector<HTMLElement>('.ProseMirror')!
+    await user.click(editable)
+    await user.type(editable, 'A draft with plenty of words in it now.')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Summarize' })).toBeEnabled())
+    await user.click(screen.getByRole('button', { name: 'Summarize' }))
+
+    expect(await screen.findByText('AI summaries are not configured on this server.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Retry/u })).toBeInTheDocument()
+  })
 })
