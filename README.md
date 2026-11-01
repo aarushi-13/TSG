@@ -33,6 +33,7 @@ npm start
 npm run preview
 ```
 
+
 ## AI summarization
 
 An optional **AI Summary** panel in the editor summarizes the open document on request. It is
