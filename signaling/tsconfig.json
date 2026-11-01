@@ -7,8 +7,9 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "types": ["node"],
-    "rootDir": ".",
-    "outDir": "../dist/signaling"
+    "allowJs": true,
+    "rootDir": "..",
+    "outDir": "../dist"
   },
-  "include": ["server.ts"]
+  "include": ["server.ts", "../server/summarize.js"]
 }

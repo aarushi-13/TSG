@@ -1,12 +1,30 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http'
-import { resolve } from 'node:path'
+import { createReadStream } from 'node:fs'
+import { stat } from 'node:fs/promises'
+import { extname, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { WebSocket, WebSocketServer } from 'ws'
+import { handleSummarize } from '../server/summarize.js'
 
 const MAX_FRAME_BYTES = 64 * 1024
 const MAX_TOPICS_PER_CLIENT = 8
 const MAX_TOPIC_LENGTH = 128
 const MAX_MESSAGES_PER_SECOND = 120
+const FRONTEND_DIRECTORY = resolve(process.cwd(), 'dist')
+const SERVER_DIRECTORIES = new Set(['server', 'signaling'])
+const CONTENT_TYPES: Record<string, string> = {
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.ico': 'image/x-icon',
+  '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.txt': 'text/plain; charset=utf-8',
+  '.webp': 'image/webp',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+}
 
 type SignalMessage = {
   type?: unknown
@@ -23,7 +41,7 @@ type SignalingService = {
   getMetrics: () => { connections: number; rooms: number; forwarded: number }
 }
 
-/** y-webrtc-compatible rendezvous only. This service has no Y.Doc or document-content store. */
+/** Serves the app and API while acting as a y-webrtc rendezvous; it has no document-content store. */
 export function createSignalingService(allowedOrigins = parseAllowedOrigins(process.env.WS_ALLOWED_ORIGINS)): SignalingService {
   const rooms = new Map<string, Set<WebSocket>>()
   const subscriptions = new Map<WebSocket, Set<string>>()
@@ -31,15 +49,26 @@ export function createSignalingService(allowedOrigins = parseAllowedOrigins(proc
   let forwarded = 0
   let acceptingConnections = true
   const server = createServer((request, response) => {
-    const path = new URL(request.url ?? '/', 'http://localhost').pathname
+    let path: string
+    try { path = new URL(request.url ?? '/', 'http://localhost').pathname }
+    catch { response.writeHead(400); response.end('bad request'); return }
     if (request.method === 'GET' && path === '/health') {
       response.writeHead(200, { 'content-type': 'application/json' })
-      response.end(JSON.stringify({ status: 'ok', connections: subscriptions.size, rooms: rooms.size }))
+      response.end(JSON.stringify({ status: 'ok', connections: subscriptions.size, rooms: rooms.size, summarizerConfigured: Boolean(process.env.GROQ_API_KEY) }))
       return
     }
-    if (request.method === 'GET' && path === '/') {
-      response.writeHead(200, { 'content-type': 'text/plain' })
-      response.end('TSG signaling only. Document contents are not stored here.\n')
+    if (path === '/api/summarize') {
+      void handleSummarize(request, response).catch(() => {
+        if (!response.writableEnded) {
+          response.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
+          response.end('Summary failed. Please try again.')
+        }
+      })
+      return
+    }
+    if (path === '/api' || path.startsWith('/api/')) { response.writeHead(404); response.end('not found'); return }
+    if (request.method === 'GET' || request.method === 'HEAD') {
+      void serveFrontend(request, response, path)
       return
     }
     response.writeHead(404)
@@ -154,6 +183,45 @@ export function createSignalingService(allowedOrigins = parseAllowedOrigins(proc
   }
 }
 
+/** Serves Vite's dist output, while keeping compiled server modules out of the public file tree. */
+async function serveFrontend(request: IncomingMessage, response: import('node:http').ServerResponse, pathname: string): Promise<void> {
+  let decodedPath: string
+  try { decodedPath = decodeURIComponent(pathname) }
+  catch { response.writeHead(400); response.end('bad request'); return }
+
+  const requestedPath = decodedPath.replace(/^[/\\]+/u, '')
+  const firstSegment = requestedPath.split(/[\\/]/u)[0]
+  const relativePath = SERVER_DIRECTORIES.has(firstSegment) ? '__reserved_server_path__' : requestedPath || 'index.html'
+  const candidate = resolve(FRONTEND_DIRECTORY, relativePath)
+  const fromRoot = relative(FRONTEND_DIRECTORY, candidate)
+  if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || fromRoot === resolve(FRONTEND_DIRECTORY)) {
+    response.writeHead(403); response.end('forbidden'); return
+  }
+
+  let filePath = candidate
+  let fileInfo
+  try { fileInfo = await stat(filePath) } catch { fileInfo = undefined }
+  if (!fileInfo?.isFile()) {
+    filePath = resolve(FRONTEND_DIRECTORY, 'index.html')
+    try { fileInfo = await stat(filePath) } catch { fileInfo = undefined }
+  }
+  if (!fileInfo?.isFile()) {
+    response.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' })
+    response.end('Frontend build is missing. Run npm run build first.')
+    return
+  }
+
+  const isAsset = relative(FRONTEND_DIRECTORY, filePath).split(sep)[0] === 'assets'
+  response.writeHead(200, {
+    'content-type': CONTENT_TYPES[extname(filePath).toLowerCase()] ?? 'application/octet-stream',
+    'content-length': fileInfo.size,
+    'cache-control': isAsset ? 'public, max-age=31536000, immutable' : 'no-cache',
+    'x-content-type-options': 'nosniff',
+  })
+  if (request.method === 'HEAD') { response.end(); return }
+  createReadStream(filePath).on('error', () => response.destroy()).pipe(response)
+}
+
 function sanitizeNegotiationMessage(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const message = value as { type?: unknown; from?: unknown; to?: unknown; token?: unknown; signal?: unknown }
@@ -190,9 +258,9 @@ function parseAllowedOrigins(value: string | undefined): Set<string> | null {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const port = Number(process.env.PORT ?? 4444)
+  const port = process.env.PORT?.trim() ? Number(process.env.PORT) : 4444
   const service = createSignalingService()
-  service.server.listen(port, '0.0.0.0', () => process.stdout.write(`TSG signaling-only service listening on 0.0.0.0:${port}\n`))
+  service.server.listen(port, '0.0.0.0', () => process.stdout.write(`TSG web service listening on 0.0.0.0:${port}\n`))
   const shutdown = () => { void service.close().finally(() => process.exit(0)) }
   process.once('SIGINT', shutdown)
   process.once('SIGTERM', shutdown)

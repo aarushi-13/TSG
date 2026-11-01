@@ -1,5 +1,5 @@
 import { Link, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { ArrowDown, ArrowRight, ArrowUpRight, Bell, Check, ChevronDown, CircleHelp, Cloud, Command, Copy, FileText, Folder, Grid2X2, HardDrive, LayoutDashboard, List, Menu, MoreHorizontal, Plus, Search, Settings, Share2, ShieldCheck, Sparkles, Trash2, WifiOff, X } from 'lucide-react'
+import { ArrowDown, ArrowRight, ArrowUpRight, Bell, Check, ChevronDown, Cloud, Command, Copy, FileText, Folder, Grid2X2, HardDrive, LayoutDashboard, List, Menu, MoreHorizontal, Plus, Search, Settings, Share2, ShieldCheck, Sparkles, Trash2, WifiOff, X } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useUIStore } from './store/ui'
 import { DocumentProvider, useDocuments } from './documents/context'

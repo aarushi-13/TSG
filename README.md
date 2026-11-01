@@ -25,12 +25,11 @@ npm install
 npm run dev
 npm run dev:all
 npm run signaling
-npm run llm
 npm test
 npm run test:e2e
 npm run typecheck:integration
 npm run build
-npm run signaling:build
+npm start
 npm run preview
 ```
 
@@ -41,9 +40,9 @@ additive: the editor, CRDT, persistence, peer sync, conflict review and version 
 exactly as before with the feature unused or unconfigured.
 
 - **Provider and model:** Groq, `openai/gpt-oss-20b` by default, overridable with `GROQ_MODEL`.
-- **Service:** `server/index.js`, started with `npm run llm`, listening on port 4455 by default.
-  It is a separate process from the WebRTC signaling service, so an LLM outage, a missing key or a
-  provider rate limit cannot affect document synchronization. Signaling never needs the API key.
+- **Service:** The Node web service serves `/api/summarize` alongside the frontend and WebRTC
+  signaling on the same `PORT` (4444 by default). `npm run build` compiles both the frontend and
+  server; `npm start` serves them together.
 - **Key handling:** `GROQ_API_KEY` is read only by that service. It is never bundled, never sent to
   the browser and never written to a response. `.env` is gitignored; `.env.example` is the template.
 - **What is sent:** only when the user clicks AI Summary, and only the text of the document they
@@ -55,8 +54,8 @@ exactly as before with the feature unused or unconfigured.
 - **Offline:** the Summarize button is disabled with an explanatory tooltip when the browser is
   offline. Editing, local persistence and peer sync are unaffected.
 
-Set `VITE_SUMMARY_URL` if the browser should reach the service at some address other than the
-same-origin `/api/summarize` path that `npm run dev` and a production reverse proxy provide.
+Set `VITE_SUMMARY_URL` only when the browser should use a different summary endpoint from the
+same-origin `/api/summarize` path.
 
 ## Roadmap
 
@@ -68,7 +67,7 @@ same-origin `/api/summarize` path that `npm run dev` and a production reverse pr
 6. Offline sync: local recovery, ordered reconnect tests, state-vector convergence status, and overlapping-edit review (implemented; test-duration limits are documented).
 7. PWA: application shell caching and offline reopen.
 8. Advanced features: comments, activity, settings, export, and stronger conflict classification.
-   AI document summarization is implemented as an optional, separately deployed service.
+   AI document summarization is implemented as an optional API in the Node web service.
 9. Broader fault-injection, performance and cross-network TURN tests.
 10. Deployment and operational hardening.
 

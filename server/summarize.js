@@ -170,9 +170,9 @@ export async function handleSummarize(request, response) {
     })
 
     if (!upstream.ok || !upstream.body) {
-      // Read the provider's message for the log only; it never reaches the browser.
-      const detail = await upstream.text().catch(() => '')
-      throw new Error(`Groq responded ${upstream.status}: ${detail.slice(0, 300)}`)
+      // Provider error bodies are not logged because they could echo submitted document text.
+      await upstream.body?.cancel().catch(() => {})
+      throw new Error(`Groq responded with status ${upstream.status}`)
     }
 
     // Headers are written on the first chunk, not up front: a failure that happens before any

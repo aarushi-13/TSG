@@ -2,7 +2,7 @@ import { defineConfig, loadEnv, type PluginOption } from 'vite'
 import react from '@vitejs/plugin-react'
 import { handleSummarize } from './server/summarize.js'
 
-/** Serves the standalone summary service's own handler, so `npm run dev` needs no second process. */
+/** Mounts the same summary handler used by the production Node service for local Vite development. */
 function summarizeApi(): PluginOption {
   return {
     name: 'tsg-summarize-api',

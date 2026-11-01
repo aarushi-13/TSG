@@ -20,7 +20,7 @@ flowchart LR
   P2P --> AWARENESS[Yjs Awareness: user and cursor state]
   PROFILE[Local peer identity] --> AWARENESS
   UI --> SUMMARY[AI summary panel, local only]
-  SUMMARY -->|explicit request| LLM[Standalone summary service]
+  SUMMARY -->|explicit request| LLM[Same-origin summary API]
 ```
 
 The client owns its local documents. Each opened document gets one Y.Doc session, restored by y-indexeddb before TipTap mounts. TipTap Collaboration binds the editor to the document's `default` Y.XmlFragment, and collaborative undo replaces StarterKit's local undo plugin. A one-time seed imports existing TipTap JSON only when the Yjs fragment has no initialization marker and no content. Yjs updates are persisted locally; a debounced JSON projection is written to the IndexedDB content store for dashboard previews and legacy repository flows. On open, the projection is refreshed from Yjs if it is stale. Each open editor binds a y-webrtc provider to this same Y.Doc; the stable document ID names the room. Once established, data channels carry Yjs sync and Awareness messages directly between browsers. Signaling is ephemeral rendezvous for room discovery and WebRTC negotiation only.
@@ -38,7 +38,7 @@ The current implementation contains the React shell, dashboard, TipTap editor, l
 - Conflict review: shared edit-intent array, stable block identity aliases, and canonical conflict-record map inside the Y.Doc. y-indexeddb persists them and y-webrtc replicates them with the rest of the document. A manual resolution writes the selected rich ProseMirror block into the editor and stores its rich JSON plus resolved status in the shared map.
 - Document version history: a separate Y.Map of named full TipTap JSON snapshots inside the same Y.Doc. y-indexeddb persists it and y-webrtc replicates it; it is independent of conflict records and the raw-update archive.
 - Signaling: transient in-memory room membership and validated WebRTC negotiation frames; no document state or durable storage.
-- AI summaries: local React state in the requesting browser only. Never written to the Y.Doc, IndexedDB or Awareness, so they are not persisted, not replicated and not visible to collaborators unless the user explicitly inserts one into the document. The summary service stores nothing and logs only a character count.
+- AI summaries: local React state in the requesting browser only. Never written to the Y.Doc, IndexedDB or Awareness, so they are not persisted, not replicated and not visible to collaborators unless the user explicitly inserts one into the document. The summary API stores nothing and logs only a character count.
 
 Yjs deterministically merges CRDT operations and safely applies repeated/out-of-order updates. Phase 6 records complete before/after snapshots for each locally changed text block, with author, timestamp, causal vectors and a local changed range. The detector groups intents by stable Yjs block identity and connected causal concurrency across participants. A canonical conflict ID combines document ID, block ID and the first intent from each participant's episode, so character edits and replayed updates do not create new records. Separate block IDs remain separate conflicts. Resolved canonical records prevent replay from reopening an episode. Existing pairwise v1 records remain stored; startup derives one canonical v2 record from their intent groups and carries forward resolved metadata.
 
@@ -54,12 +54,12 @@ The PWA/service worker is not implemented in Phase 6. A document remains recover
 flowchart LR
   EDITOR[TipTap editor state] -->|read-only getJSON| EXTRACT[Structured text extraction]
   EXTRACT --> PANEL[AI summary panel: local React state]
-  PANEL -->|POST /api/summarize on explicit click| LLM[Standalone summary service]
+  PANEL -->|POST /api/summarize on explicit click| LLM[Node web service]
   LLM -->|API key, server side only| GROQ[Groq chat completions]
   PANEL -.->|explicit Insert only| EDITOR
 ```
 
-Summarization is a read-only consumer of editor state and a deliberately separate service.
+Summarization is a read-only consumer of editor state handled by the same Node web service as signaling.
 
 The browser extracts text from the mounted editor with `editor.getJSON()` and a pure function that
 walks the ProseMirror tree, preserving headings, lists, task state, quotes, code blocks and tables
@@ -74,15 +74,13 @@ describes and says so plainly once the document has moved past it. Inserting a s
 explicit action; it is then an ordinary local edit that appends a heading and list through the normal
 TipTap transaction path, and therefore syncs, autosaves and becomes versionable like typed text.
 
-`server/index.js` runs the summary route as its own HTTP service, apart from the signaling service.
-The two share no state and no environment: only the summary service reads `GROQ_API_KEY`, and a
-provider outage, bad key or rate limit cannot degrade WebRTC rendezvous or document sync. The
-service validates and bounds the request (200 KB body, 60,000 characters forwarded, 20-character
-minimum), throttles per client IP, applies a 45-second upstream timeout, and streams the provider's
-server-sent events back as plain text. Provider error detail is logged, never returned; the browser
-receives a generic failure message and a retry action. The document is wrapped in `<document>` tags
-with a system prompt telling the model to treat it as data, which limits prompt injection from
-document content. Nothing is persisted by the service, and only a character count is logged.
+The `/api/summarize` route reuses `server/summarize.js`. It validates and bounds the request (200 KB
+body, 60,000 characters forwarded, 20-character minimum), throttles per client IP, applies a
+45-second upstream timeout, and streams the provider's server-sent events back as plain text.
+Provider error detail is neither logged nor returned; the browser receives a generic failure
+message and a retry action. The document is wrapped in `<document>` tags with a system prompt telling the
+model to treat it as data, which limits prompt injection from document content. Nothing is
+persisted by the service, and only a character count is logged.
 
 Summarization needs internet access, so it is explicitly outside the offline-first guarantee. The
 button is disabled while the browser reports itself offline, and the editor has no dependency on the
